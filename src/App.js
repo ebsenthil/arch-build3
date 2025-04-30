@@ -1,394 +1,591 @@
-import json
-import os
-import base64
-import boto3
-from datetime import datetime
-from docx import Document
-from docx.shared import Pt, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-import io
-import re
+import React, { useState, useEffect } from 'react';
+import { Amplify, API, Auth } from 'aws-amplify';
+import {
+  Container, TextField, Button, Typography, Box, Paper, Grid, 
+  CircularProgress, Tabs, Tab, Divider, Snackbar, Alert,
+  List, ListItem, ListItemText, IconButton, Accordion, AccordionSummary,
+  AccordionDetails, Select, MenuItem, InputLabel, FormControl
+} from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import DownloadIcon from '@mui/icons-material/Download';
+import PreviewIcon from '@mui/icons-material/Preview';
+import DescriptionIcon from '@mui/icons-material/Description';
+import SaveIcon from '@mui/icons-material/Save';
+import ReactMarkdown from 'react-markdown';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
+import awsExports from './aws-exports';
 
-# Initialize AWS clients
-bedrock_runtime = boto3.client('bedrock-runtime')
-bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
+// Configure Amplify
+Amplify.configure(awsExports);
 
-def lambda_handler(event, context):
-    try:
-        # Parse the incoming event
-        body = json.loads(event.get('body', '{}'))
-        
-        # Extract parameters
-        project_details = body.get('projectDetails', {})
-        knowledge_base_id = body.get('knowledgeBaseId', os.environ.get('KNOWLEDGE_BASE_ID'))
-        model_id = body.get('modelId', os.environ.get('BEDROCK_MODEL_ID', 'meta.llama3-2-90b-instruct-v1:0'))
-        action = body.get('action', 'preview')  # 'preview' or 'generate'
-        
-        # Validate required inputs
-        if not project_details:
-            return build_response(400, {'message': 'Missing project details'})
-        
-        if not knowledge_base_id:
-            return build_response(400, {'message': 'Missing knowledge base ID'})
-            
-        # Generate architecture document content
-        doc_content = generate_document_content(project_details, knowledge_base_id, model_id)
-        
-        if action == 'preview':
-            # Return the generated content for preview
-            return build_response(200, {'content': doc_content})
-        elif action == 'generate':
-            # Create Word document
-            doc_binary = create_word_document(doc_content, project_details)
-            
-            # Encode the document as base64 to send it back to the client
-            encoded_doc = base64.b64encode(doc_binary).decode('utf-8')
-            
-            return build_response(200, {
-                'document': encoded_doc,
-                'filename': f"Architecture_Document_{project_details.get('projectName', 'Project')}_{datetime.now().strftime('%Y%m%d')}.docx"
-            })
-        else:
-            return build_response(400, {'message': 'Invalid action. Use "preview" or "generate"'})
-            
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return build_response(500, {'message': f'Error processing request: {str(e)}'})
+// Create theme with corporate colors
+const theme = createTheme({
+  palette: {
+    primary: {
+      main: '#0066b2',
+    },
+    secondary: {
+      main: '#6c757d',
+    },
+    background: {
+      default: '#f8f9fa',
+    },
+  },
+  typography: {
+    fontFamily: '"Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+    h4: {
+      fontWeight: 600,
+    },
+    h5: {
+      fontWeight: 600,
+    },
+    h6: {
+      fontWeight: 600,
+    },
+  },
+});
 
-def generate_document_content(project_details, knowledge_base_id, model_id):
-    """Generate the architecture document content sections using Bedrock model and knowledge base"""
-    
-    document = {}
-    
-    # Sections to generate
-    sections = [
-        {
-            "name": "introduction",
-            "title": "Introduction",
-            "prompt": f"Generate an introduction section for an architecture document for the project named '{project_details.get('projectName')}'. The introduction should provide an overview of the project, its purpose, and key objectives. It should be professional, clear, and concise."
-        },
-        {
-            "name": "scope",
-            "title": "Scope",
-            "prompt": f"For the project '{project_details.get('projectName')}', generate the Scope section with two subsections: 'In Scope' and 'Out of Scope'. List items in bullet points. Base this on the project description: '{project_details.get('projectDescription')}' and requirements: '{project_details.get('requirements')}'."
-        },
-        {
-            "name": "requirements",
-            "title": "Requirements",
-            "prompt": f"Generate the Requirements section for the project '{project_details.get('projectName')}' with two subsections: 'Functional Requirements' and 'Non-functional Requirements'. For each requirement, include an ID (e.g., FR-01, NFR-01), a title, and a description. Base this on the project requirements: '{project_details.get('requirements')}' and any best practices for similar systems."
-        },
-        {
-            "name": "system_context_diagram",
-            "title": "System Context Diagram",
-            "prompt": f"For the project '{project_details.get('projectName')}', describe a system context diagram. Include: 1) A textual description of what should be in the diagram showing the system and its interactions with external actors/systems. 2) A table listing all actors/external services and their functions/interactions with the system. Base this on the project description: '{project_details.get('projectDescription')}' and requirements: '{project_details.get('requirements')}'."
-        },
-        {
-            "name": "component_model",
-            "title": "Component Model",
-            "prompt": f"For the project '{project_details.get('projectName')}', describe the component model. Include: 1) A textual description of what should be in the component diagram showing the main components of the system and their relationships. 2) A description of each component, its responsibility, and how it interacts with other components. Base this on the project description: '{project_details.get('projectDescription')}' and requirements: '{project_details.get('requirements')}'."
-        },
-        {
-            "name": "physical_operational_model",
-            "title": "Physical Operational Model",
-            "prompt": f"For the project '{project_details.get('projectName')}', describe the physical operational model. Include: 1) A textual description of what should be in the infrastructure diagram showing the physical deployment of the system components across infrastructure. 2) A description of each infrastructure component, including AWS services to be used, regions, high availability considerations, etc. Base this on the project description: '{project_details.get('projectDescription')}' and requirements: '{project_details.get('requirements')}'."
-        },
-        {
-            "name": "architectural_decisions",
-            "title": "Architectural Decisions",
-            "prompt": f"For the project '{project_details.get('projectName')}', generate a table of architectural decisions. Each decision should include: Decision ID, Decision Title, Context, Options Considered, Decision, Justification, and Implications. Include at least 5 key architectural decisions related to the technology stack, deployment strategy, security approach, scalability, and integration patterns. Base this on the project description: '{project_details.get('projectDescription')}' and requirements: '{project_details.get('requirements')}'."
-        },
-        {
-            "name": "viability_assessment",
-            "title": "Viability Assessment",
-            "prompt": f"For the project '{project_details.get('projectName')}', generate a viability assessment with four tables: 1) Risks - with columns for Risk ID, Description, Impact (High/Medium/Low), Probability (High/Medium/Low), and Mitigation Strategy; 2) Assumptions - with columns for Assumption ID, Description, and Impact; 3) Issues - with columns for Issue ID, Description, Impact, and Resolution Path; 4) Dependencies - with columns for Dependency ID, Description, Type (External/Internal), and Management Strategy. Base this on the project description: '{project_details.get('projectDescription')}' and requirements: '{project_details.get('requirements')}'."
-        },
-        {
-            "name": "appendix",
-            "title": "Appendix",
-            "prompt": f"Generate an appendix section for the architecture document for project '{project_details.get('projectName')}'. Include: 1) A glossary of key terms used in the document; 2) References to any standards, frameworks, or resources used; 3) Any additional information that might be useful but doesn't fit in the main document sections."
-        }
-    ]
-    
-    # Generate content for each section using knowledge base
-    for section in sections:
-        print(f"Generating section: {section['name']}")
-        content = generate_section_with_knowledge_base(
-            knowledge_base_id, 
-            model_id, 
-            section['prompt'],
-            project_details
-        )
-        document[section['name']] = {
-            'title': section['title'],
-            'content': content
-        }
-    
-    return document
+// Document sections configuration
+const documentSections = [
+  { id: 'introduction', title: '1. Introduction', icon: <DescriptionIcon fontSize="small" /> },
+  { id: 'scope', title: '2. Scope', icon: <DescriptionIcon fontSize="small" /> },
+  { id: 'requirements', title: '3. Requirements', icon: <DescriptionIcon fontSize="small" /> },
+  { id: 'system_context_diagram', title: '4. System Context Diagram', icon: <DescriptionIcon fontSize="small" /> },
+  { id: 'component_model', title: '5. Component Model', icon: <DescriptionIcon fontSize="small" /> },
+  { id: 'physical_operational_model', title: '6. Physical Operational Model', icon: <DescriptionIcon fontSize="small" /> },
+  { id: 'architectural_decisions', title: '7. Architectural Decisions', icon: <DescriptionIcon fontSize="small" /> },
+  { id: 'viability_assessment', title: '8. Viability Assessment', icon: <DescriptionIcon fontSize="small" /> },
+  { id: 'appendix', title: '9. Appendix', icon: <DescriptionIcon fontSize="small" /> },
+];
 
-def generate_section_with_knowledge_base(knowledge_base_id, model_id, prompt, project_details):
-    """Generate a section of the document using Bedrock knowledge base and model"""
-    
-    try:
-        # First, query the knowledge base to get relevant information
-        kb_response = bedrock_agent_runtime.retrieve(
-            knowledgeBaseId=knowledge_base_id,
-            retrievalQuery={
-                'text': f"{prompt} {project_details.get('projectDescription', '')} {project_details.get('requirements', '')}"
-            },
-            numberOfResults=5
-        )
-        
-        # Extract retrieved passages
-        retrieved_info = ""
-        for result in kb_response.get('retrievalResults', []):
-            retrieved_info += f"{result.get('content', {}).get('text', '')}\n\n"
-        
-        # Enhance the prompt with retrieved information
-        enhanced_prompt = f"""
-        Task: Generate a section for an architecture document based on the provided information.
-        
-        Original Prompt: {prompt}
-        
-        Relevant information from knowledge base:
-        {retrieved_info}
-        
-        Project Details:
-        Project Name: {project_details.get('projectName', 'Not provided')}
-        Project Description: {project_details.get('projectDescription', 'Not provided')}
-        Requirements: {project_details.get('requirements', 'Not provided')}
-        
-        Generate a professional, well-structured response that could be directly included in the architecture document.
-        Format the output appropriately with proper headings, lists, and tables as needed.
-        """
-        
-        # Call Bedrock model to generate the content
-        # Prepare the request body based on model type
-        if "meta.llama" in model_id.lower():
-            # Llama model format
-            request_body = json.dumps({
-                "prompt": enhanced_prompt,
-                "max_gen_len": 4000,
-                "temperature": 0.5,
-                "top_p": 0.9
-            })
-        else:
-            # Default to Claude/Anthropic format
-            request_body = json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 4000,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": enhanced_prompt
-                    }
-                ]
-            })
-        
-        response = bedrock_runtime.invoke_model(
-            modelId=model_id,
-            body=request_body
-        )
-        
-        response_body = json.loads(response.get('body').read())
-        
-        # Extract generated text based on model type
-        if "meta.llama" in model_id.lower():
-            generated_text = response_body.get('generation', '')
-        else:
-            generated_text = response_body.get('content', [{}])[0].get('text', '')
-        
-        return generated_text
-    
-    except Exception as e:
-        print(f"Error generating section with knowledge base: {str(e)}")
-        # Return a placeholder if there's an error
-        return f"Error generating content: {str(e)}"
+// Available Bedrock models
+const bedrockModels = [
+  { id: 'meta.llama3-2-90b-instruct-v1:0', name: 'Llama 3.2 90B Instruct' },
+  { id: 'meta.llama3-8b-instruct-v1:0', name: 'Llama 3 8B Instruct' },
+  { id: 'anthropic.claude-3-sonnet-20240229-v1:0', name: 'Claude 3 Sonnet' },
+  { id: 'anthropic.claude-3-haiku-20240307-v1:0', name: 'Claude 3 Haiku' },
+  { id: 'amazon.titan-text-express-v1', name: 'Amazon Titan Text Express' },
+];
 
-def create_word_document(doc_content, project_details):
-    """Create a Word document with the generated content"""
+function App() {
+  // State variables
+  const [projectDetails, setProjectDetails] = useState({
+    projectName: '',
+    projectDescription: '',
+    requirements: '',
+    cloudProvider: 'AWS',
+  });
+  
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
+  const [modelId, setModelId] = useState('meta.llama3-2-90b-instruct-v1:0');
+  const [loading, setLoading] = useState(false);
+  const [documentPreview, setDocumentPreview] = useState(null);
+  const [activeTab, setActiveTab] = useState(0);
+  const [activeSection, setActiveSection] = useState('introduction');
+  const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
+  const [savedProjects, setSavedProjects] = useState([]);
+  
+  // Effects
+  useEffect(() => {
+    // Load the knowledge base ID from environment or configuration
+    const kbId = process.env.REACT_APP_KNOWLEDGE_BASE_ID || '';
+    setKnowledgeBaseId(kbId);
     
-    doc = Document()
-    
-    # Set document properties
-    doc.core_properties.title = f"Architecture Document - {project_details.get('projectName', 'Project')}"
-    doc.core_properties.author = "Generated with AWS Bedrock"
-    
-    # Add title page
-    title_paragraph = doc.add_paragraph()
-    title_run = title_paragraph.add_run(f"Architecture Document\n{project_details.get('projectName', 'Project')}")
-    title_run.font.size = Pt(24)
-    title_run.font.bold = True
-    title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    # Add date
-    date_paragraph = doc.add_paragraph()
-    date_run = date_paragraph.add_run(f"Date: {datetime.now().strftime('%B %d, %Y')}")
-    date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    # Add page break after title page
-    doc.add_page_break()
-    
-    # Add table of contents placeholder
-    doc.add_heading("Table of Contents", level=1)
-    doc.add_paragraph("(Table of contents will be generated when opening the document in Word)")
-    doc.add_page_break()
-    
-    # Add each section
-    section_order = [
-        ("introduction", "Introduction"),
-        ("scope", "Scope"),
-        ("requirements", "Requirements"),
-        ("system_context_diagram", "System Context Diagram"),
-        ("component_model", "Component Model"),
-        ("physical_operational_model", "Physical Operational Model"),
-        ("architectural_decisions", "Architectural Decisions"),
-        ("viability_assessment", "Viability Assessment"),
-        ("appendix", "Appendix")
-    ]
-    
-    for section_key, section_title in section_order:
-        section_data = doc_content.get(section_key, {})
-        if section_data:
-            # Add section heading
-            doc.add_heading(section_data.get('title', section_title), level=1)
-            
-            # Add section content
-            content = section_data.get('content', '')
-            
-            # Parse markdown-like content to Word
-            process_content_to_word(doc, content)
-            
-            # Add page break between sections
-            doc.add_page_break()
-    
-    # Save the document to a bytes buffer
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    
-    return buffer.getvalue()
-
-def process_content_to_word(doc, content):
-    """Process markdown-like content into Word document format"""
-    
-    # Split content by lines
-    lines = content.split('\n')
-    current_list = None
-    table_data = []
-    in_table = False
-    
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        
-        # Skip empty lines
-        if not line:
-            i += 1
-            continue
-        
-        # Handle headers (## Header)
-        if line.startswith('#'):
-            level = len(re.match(r'^#+', line).group())
-            header_text = line[level:].strip()
-            doc.add_heading(header_text, level=min(level, 9))
-            current_list = None
-        
-        # Handle list items
-        elif line.startswith('- ') or line.startswith('* '):
-            if current_list is None:
-                current_list = doc.add_paragraph()
-            item_text = line[2:].strip()
-            item = current_list.add_run('• ' + item_text + '\n')
-        
-        # Handle numbered list
-        elif re.match(r'^\d+\.', line):
-            if current_list is None:
-                current_list = doc.add_paragraph()
-            item_text = re.sub(r'^\d+\.\s*', '', line)
-            item = current_list.add_run(line + '\n')
-        
-        # Handle table rows with pipe separators
-        elif '|' in line:
-            if not in_table:
-                in_table = True
-                table_data = []
-            
-            # Skip separator lines (|----|-----|)
-            if re.match(r'^[\|\-\s]+$', line):
-                i += 1
-                continue
-                
-            # Process table row
-            cells = [cell.strip() for cell in line.split('|')]
-            cells = [cell for cell in cells if cell]  # Remove empty cells
-            table_data.append(cells)
-        
-        # End of table detection
-        elif in_table and not '|' in line:
-            # Create the table
-            if table_data:
-                rows = len(table_data)
-                cols = max(len(row) for row in table_data)
-                
-                table = doc.add_table(rows=rows, cols=cols)
-                table.style = 'Table Grid'
-                
-                # Fill the table
-                for r, row in enumerate(table_data):
-                    for c, cell in enumerate(row):
-                        if c < cols:  # Ensure we don't exceed column count
-                            table.cell(r, c).text = cell
-                
-                # Bold the header row
-                for cell in table.rows[0].cells:
-                    for paragraph in cell.paragraphs:
-                        for run in paragraph.runs:
-                            run.font.bold = True
-                
-                table_data = []
-                in_table = False
-                doc.add_paragraph()  # Add space after table
-            
-            # Process the current line (first line after table)
-            continue  # Reprocess current line
-        
-        # Regular paragraph
-        else:
-            if not in_table:  # Don't add paragraphs inside table processing
-                current_list = None
-                doc.add_paragraph(line)
-        
-        i += 1
-    
-    # Handle the case where the document ends with a table
-    if in_table and table_data:
-        rows = len(table_data)
-        cols = max(len(row) for row in table_data)
-        
-        table = doc.add_table(rows=rows, cols=cols)
-        table.style = 'Table Grid'
-        
-        # Fill the table
-        for r, row in enumerate(table_data):
-            for c, cell in enumerate(row):
-                if c < cols:  # Ensure we don't exceed column count
-                    table.cell(r, c).text = cell
-        
-        # Bold the header row
-        for cell in table.rows[0].cells:
-            for paragraph in cell.paragraphs:
-                for run in paragraph.runs:
-                    run.font.bold = True
-
-def build_response(status_code, body):
-    """Build the response object for API Gateway"""
-    return {
-        'statusCode': status_code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET',
-            'Access-Control-Allow-Headers': 'Content-Type'
-        },
-        'body': json.dumps(body)
+    // Load any saved projects from local storage
+    const saved = localStorage.getItem('savedProjects');
+    if (saved) {
+      try {
+        setSavedProjects(JSON.parse(saved));
+      } catch (e) {
+        console.error('Error loading saved projects', e);
+      }
     }
+  }, []);
+  
+  // Event handlers
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setProjectDetails({
+      ...projectDetails,
+      [name]: value,
+    });
+  };
+  
+  const handleTabChange = (event, newValue) => {
+    setActiveTab(newValue);
+  };
+  
+  const handleSectionChange = (section) => {
+    setActiveSection(section);
+  };
+  
+  const handleModelChange = (e) => {
+    setModelId(e.target.value);
+  };
+  
+  const handleCloseNotification = () => {
+    setNotification({ ...notification, open: false });
+  };
+  
+  const showNotification = (message, severity = 'info') => {
+    setNotification({
+      open: true,
+      message,
+      severity,
+    });
+  };
+  
+  const validateForm = () => {
+    if (!projectDetails.projectName.trim()) {
+      showNotification('Project name is required', 'error');
+      return false;
+    }
+    if (!projectDetails.projectDescription.trim()) {
+      showNotification('Project description is required', 'error');
+      return false;
+    }
+    if (!projectDetails.requirements.trim()) {
+      showNotification('Requirements are required', 'error');
+      return false;
+    }
+    if (!knowledgeBaseId) {
+      showNotification('Knowledge Base ID is not configured. The document may lack context from reference documents.', 'warning');
+      // Continue anyway but with warning
+    }
+    return true;
+  };
+  
+  const generatePreview = async () => {
+    if (!validateForm()) return;
+    
+    setLoading(true);
+    
+    try {
+      const response = await API.post('ArchDocGenApi', '/generate-document', {
+        body: {
+          projectDetails,
+          knowledgeBaseId,
+          modelId,
+          action: 'preview'
+        }
+      });
+      
+      if (response.content) {
+        setDocumentPreview(response.content);
+        setActiveTab(1); // Switch to preview tab
+        showNotification('Document preview generated successfully!', 'success');
+      } else {
+        showNotification('Failed to generate preview: Empty response', 'error');
+      }
+    } catch (error) {
+      console.error('Error generating preview:', error);
+      showNotification(`Failed to generate preview: ${error.message || 'Unknown error'}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const generateDocument = async () => {
+    if (!documentPreview) {
+      showNotification('Please generate a preview first', 'warning');
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const response = await API.post('ArchDocGenApi', '/generate-document', {
+        body: {
+          projectDetails,
+          knowledgeBaseId,
+          modelId,
+          action: 'generate'
+        }
+      });
+      
+      if (response.document && response.filename) {
+        // Convert base64 to blob
+        const byteCharacters = atob(response.document);
+        const byteNumbers = new Array(byteCharacters.length);
+        
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+        
+        // Create download link and trigger it
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = response.filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        
+        showNotification('Document generated and downloaded successfully!', 'success');
+      } else {
+        showNotification('Failed to generate document: Invalid response', 'error');
+      }
+    } catch (error) {
+      console.error('Error generating document:', error);
+      showNotification(`Failed to generate document: ${error.message || 'Unknown error'}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const saveProject = () => {
+    if (!projectDetails.projectName) {
+      showNotification('Project name is required to save', 'warning');
+      return;
+    }
+    
+    const newProject = {
+      id: Date.now().toString(),
+      name: projectDetails.projectName,
+      date: new Date().toLocaleDateString(),
+      details: { ...projectDetails }
+    };
+    
+    const updatedProjects = [...savedProjects, newProject];
+    setSavedProjects(updatedProjects);
+    localStorage.setItem('savedProjects', JSON.stringify(updatedProjects));
+    
+    showNotification('Project saved successfully!', 'success');
+  };
+  
+  const loadProject = (project) => {
+    setProjectDetails(project.details);
+    setDocumentPreview(null); // Clear any existing preview
+    setActiveTab(0); // Switch to input tab
+    showNotification(`Project "${project.name}" loaded successfully`, 'info');
+  };
+  
+  return (
+    <ThemeProvider theme={theme}>
+      <Container maxWidth="xl" sx={{ py: 4 }}>
+        <Paper elevation={2} sx={{ p: 3, mb: 4, borderRadius: 2 }}>
+          <Typography variant="h4" gutterBottom align="center" color="primary">
+            AI-Assisted Architecture Document Generator
+          </Typography>
+          <Typography variant="subtitle1" align="center" color="text.secondary" gutterBottom>
+            Create comprehensive architecture documents powered by Bedrock AI models
+          </Typography>
+          <Divider sx={{ my: 2 }} />
+          
+          <Tabs 
+            value={activeTab} 
+            onChange={handleTabChange} 
+            variant="fullWidth" 
+            sx={{ mb: 3 }}
+            indicatorColor="primary"
+            textColor="primary"
+          >
+            <Tab icon={<DescriptionIcon />} label="Project Details" />
+            <Tab 
+              icon={<PreviewIcon />} 
+              label="Document Preview" 
+              disabled={!documentPreview} 
+            />
+          </Tabs>
+          
+          {activeTab === 0 && (
+            <Grid container spacing={3}>
+              <Grid item xs={12} md={9}>
+                <Paper elevation={1} sx={{ p: 3, height: '100%' }}>
+                  <Typography variant="h6" gutterBottom>
+                    Project Information
+                  </Typography>
+                  
+                  <Grid container spacing={3}>
+                    <Grid item xs={12} sm={6}>
+                      <TextField
+                        fullWidth
+                        label="Project Name"
+                        name="projectName"
+                        value={projectDetails.projectName}
+                        onChange={handleInputChange}
+                        required
+                        variant="outlined"
+                        margin="normal"
+                      />
+                    </Grid>
+                    
+                    <Grid item xs={12} sm={6}>
+                      <FormControl fullWidth margin="normal">
+                        <InputLabel id="cloud-provider-label">Cloud Provider</InputLabel>
+                        <Select
+                          labelId="cloud-provider-label"
+                          id="cloud-provider"
+                          name="cloudProvider"
+                          value={projectDetails.cloudProvider}
+                          label="Cloud Provider"
+                          onChange={handleInputChange}
+                        >
+                          <MenuItem value="AWS">AWS</MenuItem>
+                          <MenuItem value="Azure">Azure</MenuItem>
+                          <MenuItem value="GCP">Google Cloud</MenuItem>
+                          <MenuItem value="Hybrid">Hybrid Cloud</MenuItem>
+                        </Select>
+                      </FormControl>
+                    </Grid>
+                    
+                    <Grid item xs={12}>
+                      <TextField
+                        fullWidth
+                        label="Project Description"
+                        name="projectDescription"
+                        value={projectDetails.projectDescription}
+                        onChange={handleInputChange}
+                        required
+                        multiline
+                        rows={4}
+                        variant="outlined"
+                        margin="normal"
+                        placeholder="Provide a detailed description of the project, including its purpose, goals, and business context."
+                      />
+                    </Grid>
+                    
+                    <Grid item xs={12}>
+                      <TextField
+                        fullWidth
+                        label="Requirements"
+                        name="requirements"
+                        value={projectDetails.requirements}
+                        onChange={handleInputChange}
+                        required
+                        multiline
+                        rows={6}
+                        variant="outlined"
+                        margin="normal"
+                        placeholder="List both functional and non-functional requirements for the project. Be specific about performance, security, scalability, and compliance needs."
+                      />
+                    </Grid>
+                    
+                    <Grid item xs={12}>
+                      <FormControl fullWidth margin="normal">
+                        <InputLabel id="model-select-label">AI Model</InputLabel>
+                        <Select
+                          labelId="model-select-label"
+                          id="model-select"
+                          value={modelId}
+                          label="AI Model"
+                          onChange={handleModelChange}
+                        >
+                          {bedrockModels.map((model) => (
+                            <MenuItem key={model.id} value={model.id}>
+                              {model.name}
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    </Grid>
+                    
+                    <Grid item xs={12} sm={6}>
+                      <Button
+                        variant="contained"
+                        color="primary"
+                        fullWidth
+                        size="large"
+                        onClick={generatePreview}
+                        disabled={loading}
+                        startIcon={loading ? <CircularProgress size={20} /> : <PreviewIcon />}
+                        sx={{ mt: 2, py: 1.5 }}
+                      >
+                        {loading ? 'Generating...' : 'Generate Document Preview'}
+                      </Button>
+                    </Grid>
+                    
+                    <Grid item xs={12} sm={6}>
+                      <Button
+                        variant="outlined"
+                        color="primary"
+                        fullWidth
+                        size="large"
+                        onClick={saveProject}
+                        startIcon={<SaveIcon />}
+                        sx={{ mt: 2, py: 1.5 }}
+                      >
+                        Save Project
+                      </Button>
+                    </Grid>
+                  </Grid>
+                </Paper>
+              </Grid>
+              
+              <Grid item xs={12} md={3}>
+                <Paper elevation={1} sx={{ p: 3, height: '100%' }}>
+                  <Typography variant="h6" gutterBottom>
+                    Saved Projects
+                  </Typography>
+                  
+                  {savedProjects.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                      No saved projects yet. Fill out the project details and click "Save Project" to save your work.
+                    </Typography>
+                  ) : (
+                    <List dense>
+                      {savedProjects.map((project) => (
+                        <ListItem 
+                          key={project.id}
+                          secondaryAction={
+                            <IconButton edge="end" onClick={() => loadProject(project)}>
+                              <DescriptionIcon fontSize="small" />
+                            </IconButton>
+                          }
+                          sx={{ 
+                            border: '1px solid #e0e0e0', 
+                            borderRadius: 1, 
+                            mb: 1,
+                            '&:hover': { bgcolor: '#f5f5f5' } 
+                          }}
+                        >
+                          <ListItemText 
+                            primary={project.name} 
+                            secondary={`Saved on ${project.date}`} 
+                          />
+                        </ListItem>
+                      ))}
+                    </List>
+                  )}
+                </Paper>
+              </Grid>
+            </Grid>
+          )}
+          
+          {activeTab === 1 && documentPreview && (
+            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' } }}>
+              <Box 
+                sx={{ 
+                  width: { xs: '100%', md: '25%' }, 
+                  pr: { md: 2 }, 
+                  mb: { xs: 2, md: 0 } 
+                }}
+              >
+                <Paper elevation={1} sx={{ p: 2, mb: 2 }}>
+                  <Typography variant="h6" gutterBottom>
+                    Document Sections
+                  </Typography>
+                  
+                  <List dense sx={{ bgcolor: 'background.paper' }}>
+                    {documentSections.map((section) => (
+                      <ListItem 
+                        button 
+                        key={section.id}
+                        selected={activeSection === section.id}
+                        onClick={() => handleSectionChange(section.id)}
+                        sx={{
+                          borderRadius: 1,
+                          mb: 0.5,
+                          bgcolor: activeSection === section.id ? 'rgba(0, 102, 178, 0.1)' : 'transparent',
+                          '&:hover': { bgcolor: 'rgba(0, 102, 178, 0.05)' }
+                        }}
+                      >
+                        <ListItemText 
+                          primary={
+                            <Typography variant="body2" fontWeight={activeSection === section.id ? 600 : 400}>
+                              {section.title}
+                            </Typography>
+                          } 
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                  
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    fullWidth
+                    startIcon={<DownloadIcon />}
+                    onClick={generateDocument}
+                    disabled={loading}
+                    sx={{ mt: 2 }}
+                  >
+                    {loading ? <CircularProgress size={24} /> : 'Download as Word'}
+                  </Button>
+                </Paper>
+              </Box>
+              
+              <Box sx={{ width: { xs: '100%', md: '75%' } }}>
+                <Paper elevation={1} sx={{ p: 3 }}>
+                  <Typography variant="h5" gutterBottom color="primary">
+                    {documentPreview[activeSection]?.title || 'Section Not Available'}
+                  </Typography>
+                  
+                  <Divider sx={{ mb: 2 }} />
+                  
+                  {documentPreview[activeSection]?.content ? (
+                    <Box sx={{ 
+                      p: 2, 
+                      bgcolor: '#fafafa', 
+                      borderRadius: 1,
+                      border: '1px solid #e0e0e0',
+                      minHeight: '500px',
+                      maxHeight: '700px',
+                      overflow: 'auto'
+                    }}>
+                      <ReactMarkdown>
+                        {documentPreview[activeSection].content}
+                      </ReactMarkdown>
+                    </Box>
+                  ) : (
+                    <Box sx={{ 
+                      p: 4, 
+                      bgcolor: '#fafafa',
+                      borderRadius: 1, 
+                      textAlign: 'center'
+                    }}>
+                      <Typography color="text.secondary">
+                        This section has no content.
+                      </Typography>
+                    </Box>
+                  )}
+                </Paper>
+              </Box>
+            </Box>
+          )}
+        </Paper>
+        
+        <Paper elevation={1} sx={{ p: 2, mt: 2, bgcolor: '#f5f7fa', borderRadius: 2 }}>
+          <Accordion elevation={0} sx={{ bgcolor: 'transparent' }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Typography variant="subtitle2">About This Application</Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Typography variant="body2" color="text.secondary">
+                This application generates comprehensive architecture documents using AWS Bedrock AI models
+                and knowledge bases. The document follows enterprise architecture standards and includes
+                detailed sections covering scope, requirements, system context, component model, physical 
+                operational model, architectural decisions, and viability assessment.
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Currently using <strong>{bedrockModels.find(m => m.id === modelId)?.name || modelId}</strong> to generate content.
+              </Typography>
+            </AccordionDetails>
+          </Accordion>
+        </Paper>
+        
+        <Snackbar 
+          open={notification.open} 
+          autoHideDuration={6000} 
+          onClose={handleCloseNotification}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        >
+          <Alert 
+            onClose={handleCloseNotification} 
+            severity={notification.severity} 
+            variant="filled"
+            sx={{ width: '100%' }}
+          >
+            {notification.message}
+          </Alert>
+        </Snackbar>
+      </Container>
+    </ThemeProvider>
+  );
+}
+
+export default App;
